@@ -4,6 +4,8 @@ const SOLD_RECORDS_KEY = "web_mining_inventory_sold_records_v1";
 const USER_KEY = "web_mining_inventory_account_v1";
 const AUTH_ACCOUNTS_KEY = "web_mining_inventory_accounts_v1";
 
+let supabaseClient = null;
+
 const oreTypes = [
   { name: "铜矿", suggested: ["Cu", "Au", "Ag", "Mo", "Pb"], baseColor: "#8f4a2f" },
   { name: "铅锌矿", suggested: ["Pb", "Zn", "Ag", "Cd", "Cu"], baseColor: "#5e6670" },
@@ -58,6 +60,9 @@ const state = {
   salePrices: {},
   soldRecords: [],
   user: null,
+  profile: null,
+  loading: true,
+  cloudReady: false,
   authMode: "login",
   activeRecordId: null,
   editingPileId: null,
@@ -171,6 +176,131 @@ function createDefaultPiles() {
 
 function createDefaultSalePrices() {
   return { Cu: 68000, Ag: 14.53, Pb: 10500, Zn: 10500, Fe: 0, Ni: 128000, Co: 165000 };
+}
+
+function getSupabaseConfig() {
+  const config = window.APP_CONFIG || {};
+  return {
+    url: String(config.SUPABASE_URL || "").trim(),
+    anonKey: String(config.SUPABASE_ANON_KEY || "").trim()
+  };
+}
+
+function setupSupabase() {
+  const config = getSupabaseConfig();
+  if (!config.url || !config.anonKey || !window.supabase) return false;
+  supabaseClient = window.supabase.createClient(config.url, config.anonKey);
+  state.cloudReady = true;
+  return true;
+}
+
+function isCloudMode() {
+  return Boolean(state.cloudReady && supabaseClient);
+}
+
+function isMembershipActive() {
+  if (!isCloudMode()) return true;
+  if (!state.profile) return false;
+  if (state.profile.membershipStatus !== "active") return false;
+  if (!state.profile.membershipExpiresAt) return false;
+  return new Date(state.profile.membershipExpiresAt).getTime() > Date.now();
+}
+
+function normalizeAuthEmail(account) {
+  const value = String(account || "").trim();
+  if (value.includes("@")) return value;
+  const latinName = value.toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  const safeName = latinName || `u_${Array.from(value).map((char) => char.codePointAt(0).toString(36)).join("_")}`;
+  return `${safeName || "user"}@ore.local`;
+}
+
+function createId(prefix = "id") {
+  return window.crypto?.randomUUID ? window.crypto.randomUUID() : `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function dbToProfile(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    displayName: row.display_name || "",
+    plan: row.plan || "monthly",
+    membershipStatus: row.membership_status || "inactive",
+    membershipExpiresAt: row.membership_expires_at || null
+  };
+}
+
+function pileToDbRow(pile) {
+  return {
+    id: pile.id,
+    user_id: state.user?.id,
+    name: pile.name,
+    ore_type: pile.oreType,
+    source: pile.source || "",
+    location: pile.location || "",
+    dry_weight_ton: toNumber(pile.dryWeightTon),
+    wet_weight_ton: toNumber(pile.wetWeightTon),
+    moisture_rate: toNumber(pile.moistureRate),
+    purchase_cost: toNumber(pile.purchaseCost),
+    remark: pile.remark || "",
+    assays: pile.assays || []
+  };
+}
+
+function dbRowToPile(row) {
+  return cleanPile({
+    id: row.id,
+    name: row.name,
+    oreType: row.ore_type,
+    source: row.source,
+    location: row.location,
+    dryWeightTon: row.dry_weight_ton,
+    wetWeightTon: row.wet_weight_ton,
+    moistureRate: row.moisture_rate,
+    purchaseCost: row.purchase_cost,
+    remark: row.remark,
+    assays: row.assays || []
+  });
+}
+
+function saleRecordToDbRow(record) {
+  return {
+    id: record.id,
+    user_id: state.user?.id,
+    buyer: record.buyer,
+    sold_at: record.soldAtIso || new Date().toISOString(),
+    pile_count: record.pileCount,
+    pile_names: record.pileNames,
+    piles: record.piles || [],
+    rows: record.rows || [],
+    total_dry_weight_ton: toNumber(record.totalDryWeightTon),
+    total_purchase_cost: toNumber(record.totalPurchaseCost),
+    total_revenue: toNumber(record.totalRevenue),
+    total_profit: toNumber(record.totalProfit)
+  };
+}
+
+function dbRowToSaleRecord(row) {
+  return {
+    id: row.id,
+    buyer: row.buyer || "",
+    soldAtIso: row.sold_at,
+    soldAt: formatDateTime(new Date(row.sold_at)),
+    pileCount: row.pile_count || 0,
+    pileNames: row.pile_names || "",
+    piles: row.piles || [],
+    rows: row.rows || [],
+    totalDryWeightTon: toNumber(row.total_dry_weight_ton),
+    totalPurchaseCost: toNumber(row.total_purchase_cost),
+    totalRevenue: toNumber(row.total_revenue),
+    totalProfit: toNumber(row.total_profit)
+  };
+}
+
+function dbRowsToSalePrices(rows) {
+  return rows.reduce((map, row) => {
+    map[row.element] = toNumber(row.price);
+    return map;
+  }, createDefaultSalePrices());
 }
 
 function readStorage(key, fallback) {
@@ -356,22 +486,87 @@ function createProfileStats() {
 }
 
 function saveAll() {
+  if (isCloudMode()) return;
   writeStorage(STORAGE_KEY, state.piles.map(cleanPile));
   writeStorage(SALE_PRICE_KEY, state.salePrices);
   writeStorage(SOLD_RECORDS_KEY, state.soldRecords);
   if (state.user) writeStorage(USER_KEY, state.user);
 }
 
-function init() {
+async function loadCloudState(user) {
+  state.user = {
+    id: user.id,
+    account: user.user_metadata?.display_name || user.email || "",
+    email: user.email || "",
+    nickName: user.user_metadata?.display_name || user.email || "矿堆用户",
+    accountInitial: (user.user_metadata?.display_name || user.email || "账").slice(0, 1).toUpperCase()
+  };
+
+  const { data: profile, error: profileError } = await supabaseClient
+    .from("user_profiles")
+    .select("*")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (profileError) throw profileError;
+  state.profile = dbToProfile(profile);
+
+  if (!isMembershipActive()) {
+    state.piles = [];
+    state.salePrices = createDefaultSalePrices();
+    state.soldRecords = [];
+    return;
+  }
+
+  const [pilesResult, pricesResult, recordsResult] = await Promise.all([
+    supabaseClient.from("mine_piles").select("*").order("created_at", { ascending: false }),
+    supabaseClient.from("user_sale_prices").select("*"),
+    supabaseClient.from("sale_records").select("*").order("sold_at", { ascending: false })
+  ]);
+  if (pilesResult.error) throw pilesResult.error;
+  if (pricesResult.error) throw pricesResult.error;
+  if (recordsResult.error) throw recordsResult.error;
+  state.piles = (pilesResult.data || []).map(dbRowToPile);
+  state.salePrices = dbRowsToSalePrices(pricesResult.data || []);
+  state.soldRecords = (recordsResult.data || []).map(dbRowToSaleRecord);
+}
+
+async function refreshCloudState() {
+  if (!isCloudMode()) return;
+  const { data } = await supabaseClient.auth.getUser();
+  if (data?.user) await loadCloudState(data.user);
+}
+
+async function init() {
+  state.loading = true;
+  render();
+  if (setupSupabase()) {
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      if (data?.session?.user) await loadCloudState(data.session.user);
+    } catch (error) {
+      console.error(error);
+      toast("云端数据加载失败，请稍后重试");
+    } finally {
+      state.loading = false;
+      render();
+    }
+    return;
+  }
+
   state.piles = readStorage(STORAGE_KEY, createDefaultPiles());
   state.salePrices = readStorage(SALE_PRICE_KEY, createDefaultSalePrices());
   state.soldRecords = readStorage(SOLD_RECORDS_KEY, []);
   state.user = readStorage(USER_KEY, null);
+  state.loading = false;
   render();
 }
 
 function render() {
-  document.getElementById("app").innerHTML = state.user
+  document.getElementById("app").innerHTML = state.loading
+    ? renderLoadingView()
+    : state.user && !isMembershipActive()
+      ? renderMembershipView()
+      : state.user
     ? `
       <div class="layout">
         ${renderSidebar()}
@@ -381,6 +576,35 @@ function render() {
     `
     : renderLoginView();
   bindEvents();
+}
+
+function renderLoadingView() {
+  return `<main class="auth-page"><section class="auth-panel simple-auth-panel"><div class="auth-logo-row"><div class="brand-mark"></div><div><div class="brand-title">矿堆账本</div><div class="brand-sub">正在连接云端数据</div></div></div></section></main>`;
+}
+
+function renderMembershipView() {
+  const expiresText = state.profile?.membershipExpiresAt
+    ? formatDateTime(new Date(state.profile.membershipExpiresAt))
+    : "未开通";
+  return `
+    <main class="auth-page">
+      <section class="auth-panel simple-auth-panel membership-panel">
+        <div class="auth-logo-row">
+          <div class="brand-mark"></div>
+          <div>
+            <div class="brand-title">会员待开通</div>
+            <div class="brand-sub">账号已登录，等待管理员开通访问权限</div>
+          </div>
+        </div>
+        <div class="membership-copy">
+          <div>当前账号：${escapeHtml(state.user?.nickName || state.user?.email || "")}</div>
+          <div>会员状态：${escapeHtml(state.profile?.membershipStatus || "inactive")}</div>
+          <div>到期时间：${escapeHtml(expiresText)}</div>
+        </div>
+        <button class="primary-btn auth-submit" data-action="logout">退出登录</button>
+      </section>
+    </main>
+  `;
 }
 
 function renderSidebar() {
@@ -735,6 +959,38 @@ function renderRecordDetail(record) {
   `;
 }
 
+async function saveCloudSalePrice(element, price) {
+  if (!isCloudMode() || !isMembershipActive()) return;
+  const { error } = await supabaseClient
+    .from("user_sale_prices")
+    .upsert({ user_id: state.user.id, element, price: toNumber(price) });
+  if (error) throw error;
+}
+
+async function saveCloudPile(pile) {
+  if (!isCloudMode() || !isMembershipActive()) return;
+  const { error } = await supabaseClient.from("mine_piles").upsert(pileToDbRow(pile));
+  if (error) throw error;
+}
+
+async function deleteCloudPiles(ids) {
+  if (!isCloudMode() || !isMembershipActive() || !ids.length) return;
+  const { error } = await supabaseClient.from("mine_piles").delete().in("id", ids);
+  if (error) throw error;
+}
+
+async function saveCloudSaleRecord(record) {
+  if (!isCloudMode() || !isMembershipActive()) return;
+  const { error } = await supabaseClient.from("sale_records").insert(saleRecordToDbRow(record));
+  if (error) throw error;
+}
+
+async function deleteCloudSaleRecord(id) {
+  if (!isCloudMode() || !isMembershipActive()) return;
+  const { error } = await supabaseClient.from("sale_records").delete().eq("id", id);
+  if (error) throw error;
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-action]").forEach((node) => {
     node.addEventListener("click", handleAction);
@@ -756,8 +1012,18 @@ function bindEvents() {
   document.querySelectorAll("[data-price-element]").forEach((node) => {
     node.addEventListener("input", (event) => {
       state.salePrices[event.target.dataset.priceElement] = toNumber(event.target.value);
-      saveAll();
-      render();
+    });
+    node.addEventListener("change", async (event) => {
+      const element = event.target.dataset.priceElement;
+      state.salePrices[element] = toNumber(event.target.value);
+      try {
+        await saveCloudSalePrice(element, state.salePrices[element]);
+        saveAll();
+        render();
+      } catch (error) {
+        console.error(error);
+        toast("报价保存失败");
+      }
     });
   });
   const buyerInput = document.getElementById("buyerName");
@@ -777,43 +1043,48 @@ function handleAssayInput(event) {
   state.assayDraft[field] = value;
 }
 
-function handleAction(event) {
+async function handleAction(event) {
   event.preventDefault();
   const el = event.currentTarget;
   const action = el.dataset.action;
-  if (action === "switch-tab") {
-    state.tab = el.dataset.tab;
-    state.view = "home";
-    state.activeRecordId = null;
+  try {
+    if (action === "switch-tab") {
+      state.tab = el.dataset.tab;
+      state.view = "home";
+      state.activeRecordId = null;
+    }
+    if (action === "go-add") startAddPile();
+    if (action === "go-home") {
+      state.view = "home";
+      state.editingPileId = null;
+    }
+    if (action === "go-sale" && state.selectedIds.length) state.view = "sale";
+    if (action === "toggle-pile") togglePile(el.dataset.id);
+    if (action === "delete-selected") await deleteSelected();
+    if (action === "edit-selected") editSelectedPile();
+    if (action === "quick-element") quickElement(el.dataset.element);
+    if (action === "add-assay") addAssay();
+    if (action === "remove-assay") removeAssay(el.dataset.element);
+    if (action === "save-pile") await savePile();
+    if (action === "complete-sale") await completeSale();
+    if (action === "switch-auth") state.authMode = el.dataset.mode || "login";
+    if (action === "login") await login();
+    if (action === "register") await register();
+    if (action === "logout") await logout();
+    if (action === "use-buyer") state.buyerName = el.dataset.buyer || "";
+    if (action === "open-record") {
+      state.activeRecordId = el.dataset.id;
+      state.tab = "profile";
+    }
+    if (action === "close-record") state.activeRecordId = null;
+    if (action === "restore-record") await restoreRecord(el.dataset.id);
+    if (action === "delete-record") await deleteRecord(el.dataset.id);
+    saveAll();
+    render();
+  } catch (error) {
+    console.error(error);
+    toast(error.message || "操作失败，请稍后重试");
   }
-  if (action === "go-add") startAddPile();
-  if (action === "go-home") {
-    state.view = "home";
-    state.editingPileId = null;
-  }
-  if (action === "go-sale" && state.selectedIds.length) state.view = "sale";
-  if (action === "toggle-pile") togglePile(el.dataset.id);
-  if (action === "delete-selected") deleteSelected();
-  if (action === "edit-selected") editSelectedPile();
-  if (action === "quick-element") quickElement(el.dataset.element);
-  if (action === "add-assay") addAssay();
-  if (action === "remove-assay") removeAssay(el.dataset.element);
-  if (action === "save-pile") savePile();
-  if (action === "complete-sale") completeSale();
-  if (action === "switch-auth") state.authMode = el.dataset.mode || "login";
-  if (action === "login") login();
-  if (action === "register") register();
-  if (action === "logout") logout();
-  if (action === "use-buyer") state.buyerName = el.dataset.buyer || "";
-  if (action === "open-record") {
-    state.activeRecordId = el.dataset.id;
-    state.tab = "profile";
-  }
-  if (action === "close-record") state.activeRecordId = null;
-  if (action === "restore-record") restoreRecord(el.dataset.id);
-  if (action === "delete-record") deleteRecord(el.dataset.id);
-  saveAll();
-  render();
 }
 
 function togglePile(id) {
@@ -854,9 +1125,10 @@ function editSelectedPile() {
   state.view = "add";
 }
 
-function deleteSelected() {
+async function deleteSelected() {
   if (!state.selectedIds.length) return;
   if (!confirm(`确认删除已选 ${state.selectedIds.length} 个矿堆？删除后不会进入往期出售记录。`)) return;
+  await deleteCloudPiles(state.selectedIds);
   state.piles = state.piles.filter((pile) => !state.selectedIds.includes(pile.id));
   state.selectedIds = [];
   toast("已删除");
@@ -884,7 +1156,7 @@ function removeAssay(element) {
   state.draftAssays = state.draftAssays.filter((item) => item.element !== element);
 }
 
-function savePile() {
+async function savePile() {
   const form = state.pileForm;
   if (!form.dryWeightTon && !form.wetWeightTon) {
     toast("请填写干重或湿重");
@@ -892,7 +1164,7 @@ function savePile() {
   }
   const wasEditing = Boolean(state.editingPileId);
   const pile = {
-    id: state.editingPileId || `pile_${Date.now()}`,
+    id: state.editingPileId || createId("pile"),
     name: form.name || `${form.oreType} ${state.piles.length + 1}`,
     oreType: form.oreType,
     source: form.source,
@@ -904,6 +1176,7 @@ function savePile() {
     remark: form.remark,
     assays: state.draftAssays
   };
+  await saveCloudPile(pile);
   if (state.editingPileId) {
     state.piles = state.piles.map((item) => (item.id === state.editingPileId ? pile : item));
   } else {
@@ -918,17 +1191,19 @@ function savePile() {
   toast(wasEditing ? "修改已保存" : "矿堆已保存");
 }
 
-function completeSale() {
+async function completeSale() {
   const summary = createSaleSummary();
   if (!summary.rows.length) {
     toast("没有可出售的化验明细");
     return;
   }
   const buyer = String(state.buyerName || "").trim() || "未填写买家";
+  const soldAt = new Date();
   const record = {
-    id: `sale_${Date.now()}`,
+    id: createId("sale"),
     buyer,
-    soldAt: formatDateTime(new Date()),
+    soldAtIso: soldAt.toISOString(),
+    soldAt: formatDateTime(soldAt),
     pileCount: summary.selectedPiles.length,
     pileNames: summary.selectedPiles.map((item) => item.name).join("、"),
     piles: summary.selectedPiles.map(cleanPile),
@@ -938,6 +1213,8 @@ function completeSale() {
     totalRevenue: summary.totalRevenue,
     totalProfit: summary.totalProfit
   };
+  await saveCloudSaleRecord(record);
+  await deleteCloudPiles(state.selectedIds);
   state.soldRecords = [record, ...state.soldRecords];
   state.piles = state.piles.filter((pile) => !state.selectedIds.includes(pile.id));
   state.selectedIds = [];
@@ -947,7 +1224,7 @@ function completeSale() {
   toast("出售已完成");
 }
 
-function login() {
+async function login() {
   const account = document.getElementById("loginAccount")?.value.trim();
   const password = document.getElementById("loginPassword")?.value || "";
   if (!account || !password) {
@@ -958,24 +1235,36 @@ function login() {
     toast("密码至少 6 位");
     return;
   }
-  const accounts = readAccounts();
-  if (!accounts[account]) {
-    toast("账号不存在，请先注册");
-    return;
+  if (isCloudMode()) {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: normalizeAuthEmail(account),
+      password
+    });
+    if (error) {
+      toast("账号或密码不正确");
+      return;
+    }
+    await loadCloudState(data.user);
+  } else {
+    const accounts = readAccounts();
+    if (!accounts[account]) {
+      toast("账号不存在，请先注册");
+      return;
+    }
+    if (accounts[account].password !== password) {
+      toast("密码不正确");
+      return;
+    }
+    state.user = {
+      account,
+      nickName: accounts[account].nickName || account,
+      accountInitial: account.slice(0, 1).toUpperCase()
+    };
   }
-  if (accounts[account].password !== password) {
-    toast("密码不正确");
-    return;
-  }
-  state.user = {
-    account,
-    nickName: accounts[account].nickName || account,
-    accountInitial: account.slice(0, 1).toUpperCase()
-  };
   toast("已登录");
 }
 
-function register() {
+async function register() {
   const account = document.getElementById("loginAccount")?.value.trim();
   const password = document.getElementById("loginPassword")?.value || "";
   const confirmPassword = document.getElementById("loginPasswordConfirm")?.value || "";
@@ -991,36 +1280,58 @@ function register() {
     toast("两次密码不一致");
     return;
   }
-  const accounts = readAccounts();
-  if (accounts[account]) {
-    toast("账号已存在，请直接登录");
-    return;
+  if (isCloudMode()) {
+    const { data, error } = await supabaseClient.auth.signUp({
+      email: normalizeAuthEmail(account),
+      password,
+      options: { data: { display_name: account } }
+    });
+    if (error) {
+      toast(error.message.includes("already") ? "账号已存在，请直接登录" : "注册失败，请稍后重试");
+      return;
+    }
+    if (data.user) await loadCloudState(data.user);
+  } else {
+    const accounts = readAccounts();
+    if (accounts[account]) {
+      toast("账号已存在，请直接登录");
+      return;
+    }
+    accounts[account] = {
+      account,
+      nickName: account,
+      password,
+      createdAt: new Date().toISOString()
+    };
+    writeAccounts(accounts);
+    state.user = { account, nickName: account, accountInitial: account.slice(0, 1).toUpperCase() };
   }
-  accounts[account] = {
-    account,
-    nickName: account,
-    password,
-    createdAt: new Date().toISOString()
-  };
-  writeAccounts(accounts);
-  state.user = { account, nickName: account, accountInitial: account.slice(0, 1).toUpperCase() };
   state.authMode = "login";
   toast("注册成功");
 }
 
-function logout() {
+async function logout() {
+  if (isCloudMode()) await supabaseClient.auth.signOut();
   localStorage.removeItem(USER_KEY);
   state.user = null;
+  state.profile = null;
+  state.piles = [];
+  state.salePrices = createDefaultSalePrices();
+  state.soldRecords = [];
   state.activeRecordId = null;
   state.tab = "piles";
   state.view = "home";
   state.authMode = "login";
 }
 
-function restoreRecord(id) {
+async function restoreRecord(id) {
   const record = state.soldRecords.find((item) => item.id === id);
   if (!record) return;
-  const restored = (record.piles || []).map((pile) => ({ ...pile, id: `${pile.id}_restored_${Date.now()}` }));
+  const restored = (record.piles || []).map((pile) => ({ ...pile, id: createId("pile") }));
+  if (isCloudMode()) {
+    for (const pile of restored) await saveCloudPile(pile);
+    await deleteCloudSaleRecord(id);
+  }
   state.piles = [...restored, ...state.piles];
   state.soldRecords = state.soldRecords.filter((item) => item.id !== id);
   state.activeRecordId = null;
@@ -1029,8 +1340,9 @@ function restoreRecord(id) {
   toast("已恢复到库存");
 }
 
-function deleteRecord(id) {
+async function deleteRecord(id) {
   if (!confirm("确认删除这条出售记录？删除后不会恢复矿堆。")) return;
+  await deleteCloudSaleRecord(id);
   state.soldRecords = state.soldRecords.filter((item) => item.id !== id);
   state.activeRecordId = null;
   toast("记录已删除");

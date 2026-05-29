@@ -20,4 +20,14 @@ function copyDir(from, to) {
 
 fs.rmSync(target, { recursive: true, force: true });
 copyDir(source, target);
+
+const config = {
+  SUPABASE_URL: process.env.SUPABASE_URL || "",
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || ""
+};
+fs.writeFileSync(
+  path.join(target, "config.js"),
+  `window.APP_CONFIG = ${JSON.stringify(config, null, 2)};\n`
+);
+
 console.log(`Built static web app to ${target}`);

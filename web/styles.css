@@ -462,6 +462,17 @@ button {
   cursor: pointer;
 }
 
+.membership-copy {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(220, 199, 143, 0.16);
+  border-radius: 18px;
+  color: rgba(247, 249, 255, 0.78);
+  background: rgba(3, 8, 15, 0.42);
+  line-height: 1.6;
+}
+
 .layout {
   min-height: 100vh;
   display: grid;
