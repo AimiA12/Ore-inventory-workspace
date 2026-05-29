@@ -1,0 +1,454 @@
+<view class="page">
+  <block wx:if="{{viewMode == 'home'}}">
+    <block wx:if="{{mainTab == 'piles'}}">
+    <view class="home-head">
+      <view>
+        <view class="page-title">我的矿堆</view>
+        <view class="subtle">选择矿堆后进入出售核算</view>
+      </view>
+    </view>
+
+    <view class="summary-bar">
+      <view class="summary-item">
+        <view class="summary-label">矿堆数</view>
+        <view class="summary-value">{{stats.count}}</view>
+      </view>
+      <view class="summary-divider"></view>
+      <view class="summary-item wide">
+        <view class="summary-label">预计货值</view>
+        <view class="summary-value money">¥{{stats.totalRevenue}}</view>
+      </view>
+    </view>
+
+    <view wx:if="{{piles.length}}" class="pile-list">
+      <view
+        wx:for="{{piles}}"
+        wx:key="id"
+        class="pile-card {{item.selected ? 'selected' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="togglePileSelection"
+      >
+        <view class="select-dot">{{item.selected ? '✓' : ''}}</view>
+        <view class="heap-wrap">
+          <view class="heap" style="{{item.visualStyle}}">
+            <view class="heap-shine"></view>
+          </view>
+          <view class="heap-ground"></view>
+        </view>
+        <view class="pile-body">
+          <view class="pile-name">{{item.name}}</view>
+          <view class="pile-meta">{{item.oreType}} · 干重 {{item.dryWeightTon}} t</view>
+          <view class="info-grid">
+            <view>
+              <view class="info-label">收矿来源</view>
+              <view class="info-value">{{item.sourceText}}</view>
+            </view>
+            <view>
+              <view class="info-label">堆放地点</view>
+              <view class="info-value">{{item.locationText}}</view>
+            </view>
+            <view>
+              <view class="info-label">湿重</view>
+              <view class="info-value">{{item.wetWeightText}}</view>
+            </view>
+            <view>
+              <view class="info-label">水分</view>
+              <view class="info-value">{{item.moistureText}}</view>
+            </view>
+            <view>
+              <view class="info-label">购入价格</view>
+              <view class="info-value">{{item.purchaseCostText}}</view>
+            </view>
+          </view>
+          <view class="card-foot">
+            <view class="metal-tags">
+              <view
+                wx:for="{{item.assayBadges}}"
+                wx:key="element"
+                class="metal-tag"
+                style="border-color: {{item.color}}; color: {{item.color}};"
+              >
+                {{item.element}}
+              </view>
+            </view>
+            <view>
+              <view class="pile-money">¥{{item.totalRevenue}}</view>
+              <view class="pile-profit">利润 ¥{{item.profit}}</view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+    <view wx:else class="empty-state">右下角新增第一批矿堆。</view>
+
+    <view wx:if="{{selectedIds.length}}" class="sale-bar">
+      <view class="sale-copy">
+        <view class="sale-count">已选 {{selectedIds.length}} 个矿堆</view>
+      </view>
+      <view class="sale-actions">
+        <button class="delete-selected-btn" bindtap="deleteSelectedPiles">删除</button>
+        <button class="sell-btn" bindtap="goSale">出售</button>
+      </view>
+    </view>
+
+    <button wx:if="{{!selectedIds.length}}" class="fab" bindtap="goAdd"><text>＋</text></button>
+    </block>
+
+    <block wx:if="{{mainTab == 'profile'}}">
+      <view class="home-head">
+        <view>
+          <view class="page-title">个人中心</view>
+          <view class="subtle">查看往期出售、交易次数和往来买家</view>
+        </view>
+      </view>
+
+      <view class="profile-card">
+        <view class="avatar placeholder-avatar">{{userProfile.accountInitial || '账'}}</view>
+        <view class="profile-main">
+          <view class="profile-name">{{userProfile.nickName || '未登录'}}</view>
+          <view class="profile-sub">{{userProfile ? '账号登录后可按用户保存交易记录' : '使用账号密码登录后查看交易记录'}}</view>
+        </view>
+        <button wx:if="{{userProfile}}" class="profile-login ghost-login" bindtap="logoutAccount">退出</button>
+      </view>
+
+      <block wx:if="{{userProfile}}">
+      <view class="profile-stats">
+        <view class="profile-stat">
+          <view class="summary-label">往来交易次数</view>
+          <view class="summary-value">{{profileStats.transactionCount}}</view>
+        </view>
+        <view class="profile-stat">
+          <view class="summary-label">往来买家</view>
+          <view class="summary-value">{{profileStats.buyerCount}}</view>
+        </view>
+        <view class="profile-stat">
+          <view class="summary-label">累计出售</view>
+          <view class="summary-value">¥{{profileStats.totalAmount}}</view>
+        </view>
+        <view class="profile-stat">
+          <view class="summary-label">累计利润</view>
+          <view class="summary-value profit-color">¥{{profileStats.totalProfit}}</view>
+        </view>
+      </view>
+
+      <view class="form-panel">
+        <view class="section-title">往来买家</view>
+        <view wx:if="{{profileStats.buyers.length}}" class="buyer-list">
+          <view wx:for="{{profileStats.buyers}}" wx:key="buyer" class="buyer-row">
+            <view>
+              <view class="buyer-name">{{item.buyer}}</view>
+              <view class="micro-copy">{{item.count}} 次交易</view>
+            </view>
+            <view class="buyer-money">¥{{item.amount}}</view>
+          </view>
+        </view>
+        <view wx:else class="empty-state compact-empty">暂无往来买家。</view>
+      </view>
+
+      <view wx:if="{{!activeRecord}}" class="form-panel">
+        <view class="section-title">往期出售矿堆</view>
+        <view wx:if="{{soldRecords.length}}" class="record-list">
+          <view wx:for="{{soldRecords}}" wx:key="id" class="record-card" data-id="{{item.id}}" bindtap="openSaleRecord">
+            <view class="record-head">
+              <view class="record-title">{{item.pileNames}}</view>
+              <view class="record-date">{{item.soldAt}}</view>
+            </view>
+            <view class="record-grid">
+              <view>买家：{{item.buyer}}</view>
+              <view>矿堆：{{item.pileCount}} 个</view>
+              <view>干重：{{item.totalDryWeightTon}} t</view>
+              <view>出售：¥{{item.totalRevenue}}</view>
+              <view>购入：¥{{item.totalPurchaseCost}}</view>
+              <view class="profit-color">利润：¥{{item.totalProfit}}</view>
+            </view>
+            <view class="record-tip">点击查看详情</view>
+          </view>
+        </view>
+        <view wx:else class="empty-state compact-empty">暂无出售记录。</view>
+      </view>
+
+      <view wx:if="{{activeRecord}}" class="form-panel">
+        <view class="record-detail-head">
+          <button class="back-mini" bindtap="closeSaleRecord">‹</button>
+          <view>
+            <view class="section-title">出售详情</view>
+            <view class="micro-copy">{{activeRecord.soldAt}} · {{activeRecord.buyer}}</view>
+          </view>
+        </view>
+        <view class="record-grid detail-grid">
+          <view>矿堆：{{activeRecord.pileNames}}</view>
+          <view>干重：{{activeRecord.totalDryWeightTon}} t</view>
+          <view>出售：¥{{activeRecord.totalRevenue}}</view>
+          <view>购入：¥{{activeRecord.totalPurchaseCost}}</view>
+          <view class="profit-color">利润：¥{{activeRecord.totalProfit}}</view>
+          <view>矿堆数：{{activeRecord.pileCount}} 个</view>
+        </view>
+
+        <scroll-view scroll-x class="table-scroll record-table-scroll">
+          <view class="record-table">
+            <view class="record-table-row table-head">
+              <view>矿堆</view>
+              <view>金属</view>
+              <view>干重T</view>
+              <view>品位%</view>
+              <view>稀有g/T</view>
+              <view>含量T</view>
+              <view>稀有g</view>
+              <view>单价</view>
+              <view>金额</view>
+            </view>
+            <view wx:for="{{activeRecord.rows}}" wx:key="rowId" class="record-table-row">
+              <view>{{item.pileName || item.pileNameFull}}</view>
+              <view>{{item.metalKind}}</view>
+              <view>{{item.dryWeightText}}</view>
+              <view>{{item.gradePercentText}}</view>
+              <view>{{item.rareGradeText}}</view>
+              <view>{{item.contentTonText}}</view>
+              <view>{{item.rareContentGramText}}</view>
+              <view>{{item.price}}</view>
+              <view>{{item.revenueText}}</view>
+            </view>
+          </view>
+        </scroll-view>
+
+        <view class="record-actions">
+          <button class="secondary-btn" data-id="{{activeRecord.id}}" bindtap="restoreSaleRecord">恢复到库存</button>
+          <button class="secondary-btn danger-light" data-id="{{activeRecord.id}}" bindtap="deleteSaleRecord">删除记录</button>
+        </view>
+      </view>
+      </block>
+
+      <view wx:else class="form-panel">
+        <view class="section-title">账号登录</view>
+        <view class="micro-copy profile-copy">请输入账号和密码，登录后可查看往期出售矿堆、往来交易次数和交易过的买家。</view>
+        <view class="field">
+          <view class="label">账号</view>
+          <input value="{{loginForm.account}}" data-field="account" bindinput="bindLoginInput" placeholder="手机号 / 用户名 / 邮箱" />
+        </view>
+        <view class="field">
+          <view class="label">密码</view>
+          <input password value="{{loginForm.password}}" data-field="password" bindinput="bindLoginInput" placeholder="请输入至少 6 位密码" />
+        </view>
+        <button class="secondary-btn" bindtap="loginWithPassword">登录</button>
+      </view>
+
+    </block>
+
+    <view class="bottom-tabs">
+      <button
+        wx:for="{{bottomTabs}}"
+        wx:key="key"
+        class="bottom-tab {{mainTab == item.key ? 'active' : ''}}"
+        data-key="{{item.key}}"
+        bindtap="switchMainTab"
+      >
+        {{item.label}}
+      </button>
+    </view>
+  </block>
+
+  <block wx:if="{{viewMode == 'add'}}">
+    <view class="screen-head">
+      <button class="back-btn" bindtap="goHome">
+        <text class="chev c1">‹</text>
+        <text class="chev c2">‹</text>
+        <text class="chev c3">‹</text>
+      </button>
+      <view class="head-copy">
+        <view class="page-title">新增矿堆</view>
+      </view>
+    </view>
+
+    <view class="form-panel">
+      <view class="section-title">矿堆信息</view>
+      <view class="field">
+        <view class="label">矿堆名称</view>
+        <input value="{{pileForm.name}}" data-field="name" bindinput="bindPileInput" placeholder="如 铅锌矿 527" />
+      </view>
+      <view class="field">
+        <view class="label">矿种</view>
+        <picker range="{{oreTypes}}" range-key="name" value="{{oreTypeIndex}}" bindchange="bindOreType">
+          <view class="picker">{{pileForm.oreType}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <view class="label">干重 t</view>
+        <input type="digit" value="{{pileForm.dryWeightTon}}" data-field="dryWeightTon" bindinput="bindPileInput" placeholder="如有可优先填写" />
+      </view>
+      <view class="two-col">
+        <view class="field">
+          <view class="label">湿重 t <text class="optional">可选</text></view>
+          <input type="digit" value="{{pileForm.wetWeightTon}}" data-field="wetWeightTon" bindinput="bindPileInput" placeholder="将为您自动计算干重" />
+        </view>
+        <view class="field">
+          <view class="label">水分 % <text class="optional">可选</text></view>
+          <input type="digit" value="{{pileForm.moistureRate}}" data-field="moistureRate" bindinput="bindPileInput" placeholder="将为您自动计算干重" />
+        </view>
+      </view>
+      <view class="field">
+        <view class="label">购入价格 元</view>
+        <input type="digit" value="{{pileForm.purchaseCost}}" data-field="purchaseCost" bindinput="bindPileInput" placeholder="这批矿的购入总价" />
+      </view>
+      <view class="field">
+        <view class="label">收矿来源 <text class="optional">可选</text></view>
+        <input value="{{pileForm.source}}" data-field="source" bindinput="bindPileInput" placeholder="客户/矿山/地区" />
+      </view>
+      <view class="field">
+        <view class="label">堆放地点 <text class="optional">可选</text></view>
+        <input value="{{pileForm.location}}" data-field="location" bindinput="bindPileInput" placeholder="仓库/堆场/车号" />
+      </view>
+      <view class="field compact-field">
+        <view class="label">备注 <text class="optional">可选</text></view>
+        <textarea auto-height value="{{pileForm.remark}}" data-field="remark" bindinput="bindPileInput" placeholder="扣款风险、运输情况等" />
+      </view>
+    </view>
+
+    <view class="form-panel">
+      <view class="section-row">
+        <view>
+          <view class="section-title">化验单</view>
+          <view class="micro-copy">常用元素可点选，其他可手动输入</view>
+        </view>
+      </view>
+      <view class="suggest-list assay-suggest-list">
+        <button
+          wx:for="{{currentSuggestions}}"
+          wx:key="*this"
+          class="suggest-chip"
+          data-element="{{item}}"
+          bindtap="quickFillElement"
+        >
+          {{item}}
+        </button>
+      </view>
+      <view class="field">
+        <view class="label">金属/氧化物</view>
+        <input value="{{assayDraft.element}}" data-field="element" bindinput="bindAssayInput" placeholder="如 Cu、Ag、Li2O" />
+      </view>
+      <view class="two-col">
+        <view class="field">
+          <view class="label">品位</view>
+          <input type="digit" value="{{assayDraft.value}}" data-field="value" bindinput="bindAssayInput" placeholder="0" />
+        </view>
+        <view class="field">
+          <view class="label">单位</view>
+          <picker range="{{unitOptions}}" value="{{assayUnitIndex}}" bindchange="bindAssayUnit">
+            <view class="picker">{{assayDraft.unit}}</view>
+          </picker>
+        </view>
+      </view>
+      <button class="secondary-btn" bindtap="addDraftAssay">加入化验项</button>
+
+      <view wx:if="{{draftAssays.length}}" class="draft-list">
+        <view wx:for="{{draftAssays}}" wx:key="element" class="draft-row">
+          <view class="draft-metal">{{item.element}}</view>
+          <view>{{item.value}}{{item.unit}}</view>
+          <button class="icon-remove" data-element="{{item.element}}" bindtap="removeDraftAssay">×</button>
+        </view>
+      </view>
+    </view>
+
+    <button class="primary-btn sticky-save" bindtap="savePile">保存矿堆</button>
+  </block>
+
+  <block wx:if="{{viewMode == 'sale'}}">
+    <view class="screen-head">
+      <button class="back-btn" bindtap="goHome">
+        <text class="chev c1">‹</text>
+        <text class="chev c2">‹</text>
+        <text class="chev c3">‹</text>
+      </button>
+      <view class="head-copy">
+        <view class="page-title">出售核算</view>
+        <view class="subtle">{{saleSummary.selectedNames}}</view>
+      </view>
+    </view>
+
+    <view class="weight-panel">
+      <view class="weight-main">
+        <view class="summary-label">总干重</view>
+        <view class="big-number">{{saleSummary.totalDryWeightTon}} t</view>
+      </view>
+      <view class="weight-side">
+        <view>湿重 {{saleSummary.totalWetText}}</view>
+        <view>综合水分 {{saleSummary.moistureText}}</view>
+        <view>已选 {{saleSummary.selectedCount}} 个</view>
+      </view>
+    </view>
+
+    <view class="form-panel sale-meta-panel">
+      <view class="field compact-field">
+        <view class="label">买家/收购公司</view>
+        <input value="{{buyerName}}" bindinput="bindBuyerName" placeholder="如 XX 金属贸易公司" />
+      </view>
+      <view wx:if="{{profileStats.recentBuyers.length}}" class="buyer-chips">
+        <button
+          wx:for="{{profileStats.recentBuyers}}"
+          wx:key="buyer"
+          class="buyer-chip"
+          data-buyer="{{item.buyer}}"
+          bindtap="useBuyer"
+        >
+          {{item.buyer}}
+        </button>
+      </view>
+    </view>
+
+    <scroll-view scroll-x class="table-scroll">
+      <view class="sale-table">
+        <view class="table-row table-head {{saleSummary.singlePile ? 'single-pile-table' : ''}}">
+          <view>矿堆</view>
+          <view>金属种类</view>
+          <view>湿重 T</view>
+          <view>水分 %</view>
+          <view>干重 T</view>
+          <view>品位 %</view>
+          <view>稀有金属品位 g/T</view>
+          <view>含量 T</view>
+          <view>稀有金属含量 g</view>
+          <view>出售单价 元</view>
+          <view>总金额 元</view>
+        </view>
+        <view wx:for="{{saleSummary.rows}}" wx:key="rowId" class="table-row {{saleSummary.singlePile ? 'single-pile-table' : ''}}">
+          <view class="pile-cell {{item.pileNameGhost ? 'pile-cell-ghost' : ''}}">{{item.pileName}}</view>
+          <view class="metal-cell">
+            <view class="dot" style="background: {{item.color}};"></view>
+            <view>{{item.metalKind}}</view>
+          </view>
+          <view>{{item.wetWeightText}}</view>
+          <view>{{item.moistureText}}</view>
+          <view>{{item.dryWeightText}}</view>
+          <view>{{item.gradePercentText}}</view>
+          <view>{{item.rareGradeText}}</view>
+          <view>{{item.contentTonText}}</view>
+          <view>{{item.rareContentGramText}}</view>
+          <view>
+            <input
+              class="price-input"
+              type="digit"
+              value="{{item.price}}"
+              data-element="{{item.element}}"
+              bindinput="bindSalePrice"
+              placeholder="0"
+            />
+          </view>
+          <view class="money">{{item.revenueText}}</view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <view wx:if="{{!saleSummary.rows.length}}" class="empty-state">选中的矿堆还没有化验数据。</view>
+
+    <view class="total-panel">
+      <view>
+        <view>全部总价</view>
+        <view class="total-sub">购入 ¥{{saleSummary.totalPurchaseCost}}</view>
+      </view>
+      <view>
+        <view>¥{{saleSummary.totalRevenue}}</view>
+        <view class="total-sub profit-color">利润 ¥{{saleSummary.totalProfit}}</view>
+      </view>
+    </view>
+    <button class="primary-btn complete-sale-btn" bindtap="completeSale">已完成出售</button>
+  </block>
+</view>

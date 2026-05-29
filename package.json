@@ -1,0 +1,9 @@
+{
+  "name": "mine-stock-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-web.js",
+    "preview": "node scripts/preview-web.js"
+  }
+}

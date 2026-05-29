@@ -1,0 +1,15 @@
+page {
+  background: #f4f1ea;
+  color: #1b2622;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+picker {
+  box-sizing: border-box;
+}

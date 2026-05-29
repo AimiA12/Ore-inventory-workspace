@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "我的矿堆",
+    "navigationBarBackgroundColor": "#13221e",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f4f1ea"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
