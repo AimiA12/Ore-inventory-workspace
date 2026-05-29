@@ -3,6 +3,17 @@
 
 create extension if not exists "pgcrypto";
 
+create table if not exists public.user_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  display_name text default '',
+  plan text not null default 'monthly',
+  membership_status text not null default 'inactive'
+    check (membership_status in ('inactive', 'active', 'paused', 'expired')),
+  membership_expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.mine_piles (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -54,6 +65,50 @@ begin
 end;
 $$;
 
+create or replace function public.has_active_membership(check_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.user_profiles profile
+    where profile.user_id = check_user
+      and profile.membership_status = 'active'
+      and profile.membership_expires_at is not null
+      and profile.membership_expires_at > now()
+  );
+$$;
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.user_profiles (user_id, display_name)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1), '')
+  )
+  on conflict (user_id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
+drop trigger if exists user_profiles_set_updated_at on public.user_profiles;
+create trigger user_profiles_set_updated_at
+before update on public.user_profiles
+for each row execute function public.set_updated_at();
+
 drop trigger if exists mine_piles_set_updated_at on public.mine_piles;
 create trigger mine_piles_set_updated_at
 before update on public.mine_piles
@@ -64,63 +119,76 @@ create trigger user_sale_prices_set_updated_at
 before update on public.user_sale_prices
 for each row execute function public.set_updated_at();
 
+alter table public.user_profiles enable row level security;
 alter table public.mine_piles enable row level security;
 alter table public.sale_records enable row level security;
 alter table public.user_sale_prices enable row level security;
 
+drop policy if exists "Users can read own profile" on public.user_profiles;
+create policy "Users can read own profile"
+on public.user_profiles for select
+using (auth.uid() = user_id);
+
 drop policy if exists "Users can read own mine piles" on public.mine_piles;
 create policy "Users can read own mine piles"
 on public.mine_piles for select
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can insert own mine piles" on public.mine_piles;
 create policy "Users can insert own mine piles"
 on public.mine_piles for insert
-with check (auth.uid() = user_id);
+with check (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can update own mine piles" on public.mine_piles;
 create policy "Users can update own mine piles"
 on public.mine_piles for update
-using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()))
+with check (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can delete own mine piles" on public.mine_piles;
 create policy "Users can delete own mine piles"
 on public.mine_piles for delete
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can read own sale records" on public.sale_records;
 create policy "Users can read own sale records"
 on public.sale_records for select
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can insert own sale records" on public.sale_records;
 create policy "Users can insert own sale records"
 on public.sale_records for insert
-with check (auth.uid() = user_id);
+with check (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can delete own sale records" on public.sale_records;
 create policy "Users can delete own sale records"
 on public.sale_records for delete
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can read own sale prices" on public.user_sale_prices;
 create policy "Users can read own sale prices"
 on public.user_sale_prices for select
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can upsert own sale prices" on public.user_sale_prices;
 create policy "Users can upsert own sale prices"
 on public.user_sale_prices for insert
-with check (auth.uid() = user_id);
+with check (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can update own sale prices" on public.user_sale_prices;
 create policy "Users can update own sale prices"
 on public.user_sale_prices for update
-using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()))
+with check (auth.uid() = user_id and public.has_active_membership(auth.uid()));
 
 drop policy if exists "Users can delete own sale prices" on public.user_sale_prices;
 create policy "Users can delete own sale prices"
 on public.user_sale_prices for delete
-using (auth.uid() = user_id);
+using (auth.uid() = user_id and public.has_active_membership(auth.uid()));
+
+-- Manual monthly activation example:
+-- update public.user_profiles
+-- set membership_status = 'active',
+--     plan = 'monthly',
+--     membership_expires_at = now() + interval '1 month'
+-- where user_id = 'USER_UUID_HERE';
