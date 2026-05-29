@@ -27,7 +27,7 @@
 - `user_profiles`：用户资料、会员套餐、会员状态和会员到期时间
 - `mine_piles`：用户矿堆库存
 - `sale_records`：往期出售记录
-- `user_sale_prices`：用户自己的金属报价记忆
+- `user_sale_prices`：用户自己的金属报价和出售系数记忆
 
 并开启 RLS，用户只能访问自己的数据；矿堆、出售记录和报价记忆还会检查会员是否有效。
 

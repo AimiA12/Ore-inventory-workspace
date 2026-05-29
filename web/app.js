@@ -1,5 +1,6 @@
 const STORAGE_KEY = "web_mining_inventory_piles_v1";
 const SALE_PRICE_KEY = "web_mining_inventory_sale_prices_v1";
+const SALE_RATE_KEY = "web_mining_inventory_sale_rates_v1";
 const SOLD_RECORDS_KEY = "web_mining_inventory_sold_records_v1";
 const USER_KEY = "web_mining_inventory_account_v1";
 const AUTH_ACCOUNTS_KEY = "web_mining_inventory_accounts_v1";
@@ -58,6 +59,7 @@ const state = {
   piles: [],
   selectedIds: [],
   salePrices: {},
+  saleRates: {},
   soldRecords: [],
   user: null,
   profile: null,
@@ -129,7 +131,6 @@ function createEmptyPileForm() {
     dryWeightTon: "",
     wetWeightTon: "",
     moistureRate: "",
-    purchaseCost: "",
     source: "",
     location: "",
     remark: ""
@@ -147,12 +148,11 @@ function createDefaultPiles() {
       dryWeightTon: 118.569,
       wetWeightTon: 128.6,
       moistureRate: 7.8,
-      purchaseCost: 240000,
       remark: "铜为主，银可计价。",
       assays: [
-        { element: "Cu", value: 2.35, unit: "%" },
-        { element: "Ag", value: 118, unit: "g/t" },
-        { element: "Fe", value: 18.4, unit: "%" }
+        { element: "Cu", value: 2.35, unit: "%", purchaseMetalPrice: 60000, purchaseRate: 70 },
+        { element: "Ag", value: 118, unit: "g/t", purchaseMetalPrice: 10, purchaseRate: 50 },
+        { element: "Fe", value: 18.4, unit: "%", purchaseMetalPrice: 0, purchaseRate: 0 }
       ]
     },
     {
@@ -164,11 +164,10 @@ function createDefaultPiles() {
       dryWeightTon: 122,
       wetWeightTon: 0,
       moistureRate: 0,
-      purchaseCost: 310000,
       remark: "",
       assays: [
-        { element: "Ni", value: 1.82, unit: "%" },
-        { element: "Co", value: 0.08, unit: "%" }
+        { element: "Ni", value: 1.82, unit: "%", purchaseMetalPrice: 100000, purchaseRate: 65 },
+        { element: "Co", value: 0.08, unit: "%", purchaseMetalPrice: 120000, purchaseRate: 60 }
       ]
     }
   ];
@@ -176,6 +175,10 @@ function createDefaultPiles() {
 
 function createDefaultSalePrices() {
   return { Cu: 68000, Ag: 14.53, Pb: 10500, Zn: 10500, Fe: 0, Ni: 128000, Co: 165000 };
+}
+
+function createDefaultSaleRates() {
+  return { Cu: 100, Ag: 100, Pb: 100, Zn: 100, Fe: 100, Ni: 100, Co: 100 };
 }
 
 function getSupabaseConfig() {
@@ -230,19 +233,20 @@ function dbToProfile(row) {
 }
 
 function pileToDbRow(pile) {
+  const clean = cleanPile(pile);
   return {
-    id: pile.id,
+    id: clean.id,
     user_id: state.user?.id,
-    name: pile.name,
-    ore_type: pile.oreType,
-    source: pile.source || "",
-    location: pile.location || "",
-    dry_weight_ton: toNumber(pile.dryWeightTon),
-    wet_weight_ton: toNumber(pile.wetWeightTon),
-    moisture_rate: toNumber(pile.moistureRate),
-    purchase_cost: toNumber(pile.purchaseCost),
-    remark: pile.remark || "",
-    assays: pile.assays || []
+    name: clean.name,
+    ore_type: clean.oreType,
+    source: clean.source || "",
+    location: clean.location || "",
+    dry_weight_ton: calculateDryWeight(clean),
+    wet_weight_ton: toNumber(clean.wetWeightTon),
+    moisture_rate: toNumber(clean.moistureRate),
+    purchase_cost: calculatePilePurchaseCost(clean),
+    remark: clean.remark || "",
+    assays: clean.assays || []
   };
 }
 
@@ -303,6 +307,13 @@ function dbRowsToSalePrices(rows) {
   }, createDefaultSalePrices());
 }
 
+function dbRowsToSaleRates(rows) {
+  return rows.reduce((map, row) => {
+    map[row.element] = row.coefficient === undefined || row.coefficient === null ? toNumber(row.rate || 100) : toNumber(row.coefficient);
+    return map;
+  }, createDefaultSaleRates());
+}
+
 function readStorage(key, fallback) {
   try {
     const value = localStorage.getItem(key);
@@ -339,7 +350,9 @@ function cleanPile(pile) {
     assays: (pile.assays || []).map((item) => ({
       element: normalizeElement(item.element),
       value: toNumber(item.value),
-      unit: unitOptions.includes(item.unit) ? item.unit : inferUnit(item.element)
+      unit: unitOptions.includes(item.unit) ? item.unit : inferUnit(item.element),
+      purchaseMetalPrice: toNumber(item.purchaseMetalPrice),
+      purchaseRate: item.purchaseRate === undefined || item.purchaseRate === "" ? 100 : toNumber(item.purchaseRate)
     }))
   };
 }
@@ -349,6 +362,43 @@ function calculateDryWeight(pile) {
   const wetWeightTon = toNumber(pile.wetWeightTon);
   const moistureRate = Math.min(Math.max(toNumber(pile.moistureRate), 0), 99.9);
   return wetWeightTon * (1 - moistureRate / 100);
+}
+
+function calculateDryWeightFromForm(form = state.pileForm) {
+  const wetWeightTon = toNumber(form.wetWeightTon);
+  const moistureRate = Math.min(Math.max(toNumber(form.moistureRate), 0), 99.9);
+  if (!wetWeightTon) return 0;
+  return round(wetWeightTon * (1 - moistureRate / 100), 3);
+}
+
+function getAssayAmounts(dryWeightTon, assay) {
+  const rare = isRareElement(assay.element, assay.unit);
+  const contentKgPerTon = kgPerTon(assay.value, assay.unit);
+  const totalKg = dryWeightTon * contentKgPerTon;
+  return {
+    rare,
+    kgPerTon: round(contentKgPerTon, 4),
+    contentTon: round(rare ? 0 : totalKg / 1000, 4),
+    rareContentGram: round(rare ? dryWeightTon * toNumber(assay.value) : 0, 3)
+  };
+}
+
+function amountByUnit(assay, unitPrice) {
+  return assay.rare ? assay.rareContentGram * unitPrice : assay.contentTon * unitPrice;
+}
+
+function purchaseUnitPrice(assay) {
+  return toNumber(assay.purchaseMetalPrice) * toNumber(assay.purchaseRate) / 100;
+}
+
+function calculatePilePurchaseCost(pile) {
+  const clean = cleanPile(pile);
+  const dryWeightTon = round(calculateDryWeight(clean), 3);
+  const total = clean.assays.reduce((sum, assay) => {
+    const amounts = getAssayAmounts(dryWeightTon, assay);
+    return sum + amountByUnit({ ...assay, ...amounts }, purchaseUnitPrice(assay));
+  }, 0);
+  return round(total || clean.purchaseCost, 2);
 }
 
 function createVisualStyle(baseColor, assays) {
@@ -371,39 +421,43 @@ function enrichPile(pile) {
   const dryWeightTon = round(calculateDryWeight(clean), 3);
   const assays = clean.assays.map((item) => {
     const meta = metalMeta[item.element] || { name: item.element, color: "#7b6f63" };
-    const rare = isRareElement(item.element, item.unit);
-    const contentKgPerTon = kgPerTon(item.value, item.unit);
-    const totalKg = dryWeightTon * contentKgPerTon;
-    const contentTon = rare ? 0 : totalKg / 1000;
-    const rareContentGram = rare ? dryWeightTon * item.value : 0;
-    const price = toNumber(state.salePrices[item.element]);
-    const revenue = rare ? rareContentGram * price : contentTon * price;
+    const amounts = getAssayAmounts(dryWeightTon, item);
+    const saleMetalPrice = toNumber(state.salePrices[item.element]);
+    const saleRate = state.saleRates[item.element] === undefined ? 100 : toNumber(state.saleRates[item.element]);
+    const saleUnitPrice = saleMetalPrice * saleRate / 100;
+    const purchasePrice = purchaseUnitPrice(item);
+    const revenue = amountByUnit({ ...item, ...amounts }, saleUnitPrice);
+    const purchaseAmount = amountByUnit({ ...item, ...amounts }, purchasePrice);
     return {
       ...item,
       elementName: meta.name,
       color: meta.color,
-      rare,
+      ...amounts,
       metalKind: `${meta.name} ${item.element}`,
-      kgPerTon: round(contentKgPerTon, 4),
-      contentTon: round(contentTon, 4),
-      rareContentGram: round(rareContentGram, 3),
-      price,
+      purchaseUnitPrice: round(purchasePrice, 4),
+      purchaseAmount: round(purchaseAmount, 2),
+      saleMetalPrice,
+      saleRate,
+      saleUnitPrice: round(saleUnitPrice, 4),
+      price: saleMetalPrice,
       revenue: round(revenue, 2)
     };
   });
   const totalRevenue = round(assays.reduce((sum, item) => sum + item.revenue, 0), 2);
+  const purchaseCost = calculatePilePurchaseCost(clean);
   return {
     ...clean,
     dryWeightTon,
+    purchaseCost,
     assays,
     selected: state.selectedIds.includes(clean.id),
     sourceText: clean.source || "未填写",
     locationText: clean.location || "未填写",
     wetWeightText: clean.wetWeightTon ? `${clean.wetWeightTon} t` : "未填写",
     moistureText: clean.moistureRate ? `${round(clean.moistureRate, 2)}%` : "未填写",
-    purchaseCostText: clean.purchaseCost ? `¥${money(clean.purchaseCost)}` : "未填写",
+    purchaseCostText: purchaseCost ? `¥${money(purchaseCost)}` : "未填写",
     totalRevenue,
-    profit: round(totalRevenue - clean.purchaseCost, 2),
+    profit: round(totalRevenue - purchaseCost, 2),
     visualStyle: createVisualStyle(oreConfig.baseColor, assays),
     assayBadges: assays.slice(0, 5)
   };
@@ -424,8 +478,10 @@ function createSaleSummary() {
 
   selectedPiles.forEach((pile) => {
     pile.assays.forEach((assay) => {
-      const price = toNumber(state.salePrices[assay.element]);
-      const revenue = assay.rare ? assay.rareContentGram * price : assay.contentTon * price;
+      const saleMetalPrice = toNumber(state.salePrices[assay.element]);
+      const saleRate = state.saleRates[assay.element] === undefined ? 100 : toNumber(state.saleRates[assay.element]);
+      const saleUnitPrice = saleMetalPrice * saleRate / 100;
+      const revenue = amountByUnit(assay, saleUnitPrice);
       rows.push({
         rowId: `${pile.id}_${assay.element}`,
         pileName: pile.name,
@@ -439,7 +495,14 @@ function createSaleSummary() {
         rareGradeText: assay.rare ? String(round(assay.value, 4)) : "-",
         contentTonText: assay.rare ? "-" : formatDash(assay.contentTon, 4),
         rareContentGramText: assay.rare ? formatDash(assay.rareContentGram, 3) : "-",
-        price,
+        purchaseMetalPrice: toNumber(assay.purchaseMetalPrice),
+        purchaseRate: toNumber(assay.purchaseRate),
+        purchaseUnitPrice: round(purchaseUnitPrice(assay), 4),
+        purchaseAmount: round(assay.purchaseAmount, 2),
+        saleMetalPrice,
+        saleRate,
+        saleUnitPrice: round(saleUnitPrice, 4),
+        price: saleMetalPrice,
         revenue: round(revenue, 2)
       });
     });
@@ -489,6 +552,7 @@ function saveAll() {
   if (isCloudMode()) return;
   writeStorage(STORAGE_KEY, state.piles.map(cleanPile));
   writeStorage(SALE_PRICE_KEY, state.salePrices);
+  writeStorage(SALE_RATE_KEY, state.saleRates);
   writeStorage(SOLD_RECORDS_KEY, state.soldRecords);
   if (state.user) writeStorage(USER_KEY, state.user);
 }
@@ -513,6 +577,7 @@ async function loadCloudState(user) {
   if (!isMembershipActive()) {
     state.piles = [];
     state.salePrices = createDefaultSalePrices();
+    state.saleRates = createDefaultSaleRates();
     state.soldRecords = [];
     return;
   }
@@ -527,6 +592,7 @@ async function loadCloudState(user) {
   if (recordsResult.error) throw recordsResult.error;
   state.piles = (pilesResult.data || []).map(dbRowToPile);
   state.salePrices = dbRowsToSalePrices(pricesResult.data || []);
+  state.saleRates = dbRowsToSaleRates(pricesResult.data || []);
   state.soldRecords = (recordsResult.data || []).map(dbRowToSaleRecord);
 }
 
@@ -555,6 +621,7 @@ async function init() {
 
   state.piles = readStorage(STORAGE_KEY, createDefaultPiles());
   state.salePrices = readStorage(SALE_PRICE_KEY, createDefaultSalePrices());
+  state.saleRates = readStorage(SALE_RATE_KEY, createDefaultSaleRates());
   state.soldRecords = readStorage(SOLD_RECORDS_KEY, []);
   state.user = readStorage(USER_KEY, null);
   state.loading = false;
@@ -635,6 +702,7 @@ function navButton(key, label) {
 
 function renderContent() {
   if (state.view === "add") return renderAddView();
+  if (state.view === "purchase") return renderPurchaseCostView();
   if (state.view === "sale") return renderSaleView();
   if (state.tab === "profile") return renderProfileView();
   return renderHomeView();
@@ -692,7 +760,7 @@ function renderPileCard(pile) {
           ${infoItem("堆放地点", pile.locationText)}
           ${infoItem("湿重", pile.wetWeightText)}
           ${infoItem("水分", pile.moistureText)}
-          ${infoItem("购入价格", pile.purchaseCostText)}
+          ${infoItem("成本", pile.purchaseCostText)}
         </div>
         <div class="card-foot">
           <div class="metal-tags">${pile.assayBadges.map((item) => `<span class="metal-tag" style="color:${item.color}">${item.element}</span>`).join("")}</div>
@@ -725,20 +793,21 @@ function renderActionBar() {
 function renderAddView() {
   const suggestions = getOreConfig(state.pileForm.oreType).suggested;
   const isEditing = Boolean(state.editingPileId);
+  const computedDryWeight = calculateDryWeightFromForm();
+  state.pileForm.dryWeightTon = computedDryWeight || "";
   return `
     <div class="screen-head">
       <button class="back-btn" data-action="go-home"><span>‹</span><span>‹</span><span>‹</span></button>
-      <div><h1 class="page-title">${isEditing ? "修改矿堆" : "新增矿堆"}</h1><div class="subtle">干重优先，湿重和水分可选</div></div>
+      <div><h1 class="page-title">${isEditing ? "修改矿堆" : "新增矿堆"}</h1><div class="subtle">填写湿重和水分后自动计算干重</div></div>
     </div>
     <section class="panel">
       <h2 class="section-title">矿堆信息</h2>
       <div class="form-grid">
         ${field("矿堆名称", `<input class="input" data-form="pile" data-field="name" value="${escapeAttr(state.pileForm.name)}" placeholder="如 铅锌矿 527">`)}
         ${field("矿种", `<select class="select" data-form="pile" data-field="oreType">${oreTypes.map((item) => `<option ${item.name === state.pileForm.oreType ? "selected" : ""}>${item.name}</option>`).join("")}</select>`)}
-        ${field("干重 t", `<input class="input" type="number" step="0.001" data-form="pile" data-field="dryWeightTon" value="${escapeAttr(state.pileForm.dryWeightTon)}" placeholder="如有可优先填写">`)}
-        ${field("购入价格 元", `<input class="input" type="number" step="0.01" data-form="pile" data-field="purchaseCost" value="${escapeAttr(state.pileForm.purchaseCost)}" placeholder="这批矿的购入总价">`)}
-        ${field(`湿重 t <span class="optional">可选</span>`, `<input class="input" type="number" step="0.001" data-form="pile" data-field="wetWeightTon" value="${escapeAttr(state.pileForm.wetWeightTon)}" placeholder="将为您自动计算干重">`)}
-        ${field(`水分 % <span class="optional">可选</span>`, `<input class="input" type="number" step="0.01" data-form="pile" data-field="moistureRate" value="${escapeAttr(state.pileForm.moistureRate)}" placeholder="将为您自动计算干重">`)}
+        ${field("湿重 t", `<input class="input" type="number" step="0.001" data-form="pile" data-field="wetWeightTon" value="${escapeAttr(state.pileForm.wetWeightTon)}" placeholder="如 400">`)}
+        ${field("水分 %", `<input class="input" type="number" step="0.01" data-form="pile" data-field="moistureRate" value="${escapeAttr(state.pileForm.moistureRate)}" placeholder="如 8">`)}
+        ${field("干重 t", `<input class="input" id="dryWeightPreview" type="number" value="${escapeAttr(computedDryWeight || "")}" placeholder="由湿重和水分自动计算" readonly>`, true)}
         ${field(`收矿来源 <span class="optional">可选</span>`, `<input class="input" data-form="pile" data-field="source" value="${escapeAttr(state.pileForm.source)}" placeholder="客户 / 矿山 / 地区">`)}
         ${field(`堆放地点 <span class="optional">可选</span>`, `<input class="input" data-form="pile" data-field="location" value="${escapeAttr(state.pileForm.location)}" placeholder="仓库 / 堆场 / 车号">`)}
         ${field(`备注 <span class="optional">可选</span>`, `<textarea class="textarea" data-form="pile" data-field="remark" rows="1" placeholder="扣款风险、运输情况等">${escapeHtml(state.pileForm.remark)}</textarea>`, true)}
@@ -756,12 +825,47 @@ function renderAddView() {
       </div>
       ${state.draftAssays.length ? `<div class="draft-list">${state.draftAssays.map((item) => `<div class="draft-row"><strong>${item.element}</strong><span>${item.value}${item.unit}</span><button class="icon-btn" data-action="remove-assay" data-element="${item.element}">×</button></div>`).join("")}</div>` : ""}
     </section>
-    <div class="center-actions"><button class="primary-btn" data-action="save-pile">${isEditing ? "保存修改" : "保存矿堆"}</button></div>
+    <div class="center-actions"><button class="primary-btn" data-action="go-purchase-pricing">保存并填写购入价格</button></div>
   `;
 }
 
 function field(label, control, full = false) {
   return `<div class="field ${full ? "full" : ""}"><label class="label">${label}</label>${control}</div>`;
+}
+
+function createDraftPile() {
+  const form = state.pileForm;
+  const dryWeightTon = calculateDryWeightFromForm(form);
+  return cleanPile({
+    id: state.editingPileId || createId("pile"),
+    name: form.name || `${form.oreType} ${state.piles.length + 1}`,
+    oreType: form.oreType,
+    source: form.source,
+    location: form.location,
+    dryWeightTon,
+    wetWeightTon: toNumber(form.wetWeightTon),
+    moistureRate: toNumber(form.moistureRate),
+    remark: form.remark,
+    assays: state.draftAssays
+  });
+}
+
+function renderPurchaseCostView() {
+  const pile = enrichPile(createDraftPile());
+  return `
+    <div class="screen-head">
+      <button class="back-btn" data-action="back-to-assay"><span>‹</span><span>‹</span><span>‹</span></button>
+      <div><h1 class="page-title">购入成本</h1><div class="subtle">${escapeHtml(pile.name)} · 干重 ${pile.dryWeightTon} t</div></div>
+    </div>
+    <div class="table-wrap">
+      <table class="sale-table">
+        <thead><tr><th class="pile-col">矿堆</th><th>金属种类</th><th>湿重 T</th><th>水分 %</th><th>干重 T</th><th>品位 %</th><th>稀有金属品位 g/T</th><th>含量 T</th><th>稀有金属含量 g</th><th>购入金属价 元</th><th>购入系数 %</th><th>购入单价 元</th><th>购入总金额 元</th></tr></thead>
+        <tbody>${pile.assays.map((assay) => renderCostRow({ pileName: pile.name, pile, assay, editable: true })).join("")}</tbody>
+      </table>
+    </div>
+    <section class="panel total-panel"><div>购入总计<div class="total-sub">这批矿的成本</div></div><div><strong>¥${money(pile.purchaseCost)}</strong></div></section>
+    <div class="center-actions"><button class="primary-btn" data-action="save-pile">保存成本并入库</button></div>
+  `;
 }
 
 function renderSaleView() {
@@ -781,15 +885,46 @@ function renderSaleView() {
       </div>
       ${createProfileStats().recentBuyers.length ? `<div class="metal-tags" style="margin-top:12px">${createProfileStats().recentBuyers.map((item) => `<button class="suggest-chip" data-action="use-buyer" data-buyer="${escapeAttr(item.buyer)}">${escapeHtml(item.buyer)}</button>`).join("")}</div>` : ""}
     </section>
+    <h2 class="section-title table-title">成本表格</h2>
     <div class="table-wrap">
       <table class="sale-table">
-        <thead><tr><th class="pile-col">矿堆</th><th>金属种类</th><th>湿重 T</th><th>水分 %</th><th>干重 T</th><th>品位 %</th><th>稀有金属品位 g/T</th><th>含量 T</th><th>稀有金属含量 g</th><th>出售单价 元</th><th>总金额 元</th></tr></thead>
+        <thead><tr><th class="pile-col">矿堆</th><th>金属种类</th><th>湿重 T</th><th>水分 %</th><th>干重 T</th><th>品位 %</th><th>稀有金属品位 g/T</th><th>含量 T</th><th>稀有金属含量 g</th><th>购入金属价 元</th><th>购入系数 %</th><th>购入单价 元</th><th>购入总金额 元</th></tr></thead>
+        <tbody>${summary.rows.map((row) => renderCostRow(row)).join("")}</tbody>
+      </table>
+    </div>
+    <section class="panel total-panel"><div>购入总计<div class="total-sub">成本</div></div><div><strong>¥${money(summary.totalPurchaseCost)}</strong></div></section>
+    <h2 class="section-title table-title">出售表格</h2>
+    <div class="table-wrap">
+      <table class="sale-table">
+        <thead><tr><th class="pile-col">矿堆</th><th>金属种类</th><th>湿重 T</th><th>水分 %</th><th>干重 T</th><th>品位 %</th><th>稀有金属品位 g/T</th><th>含量 T</th><th>稀有金属含量 g</th><th>出售金属价 元</th><th>出售系数 %</th><th>出售单价 元</th><th>出售总金额 元</th></tr></thead>
         <tbody>${summary.rows.map(renderSaleRow).join("")}</tbody>
       </table>
     </div>
     ${summary.rows.length ? "" : `<div class="empty">选中的矿堆还没有化验数据。</div>`}
-    <section class="panel total-panel"><div>全部总价<div class="total-sub">购入 ¥${money(summary.totalPurchaseCost)}</div></div><div><strong>¥${money(summary.totalRevenue)}</strong><div class="total-sub">利润 ¥${money(summary.totalProfit)}</div></div></section>
+    <section class="panel total-panel"><div>出售总计<div class="total-sub">成本 ¥${money(summary.totalPurchaseCost)}</div></div><div><strong>¥${money(summary.totalRevenue)}</strong><div class="total-sub">利润 ¥${money(summary.totalProfit)}</div></div></section>
     <div class="center-actions"><button class="primary-btn" data-action="complete-sale">已完成出售</button></div>
+  `;
+}
+
+function renderCostRow(row) {
+  const assay = row.assay || row;
+  const pile = row.pile;
+  return `
+    <tr>
+      <td class="pile-col">${escapeHtml(row.pileName)}</td>
+      <td><span class="metal-cell"><span class="dot" style="background:${assay.color || row.color}"></span>${escapeHtml(assay.metalKind || row.metalKind)}</span></td>
+      <td>${pile ? formatDash(pile.wetWeightTon, 3) : row.wetWeightText}</td>
+      <td>${pile ? formatDash(pile.moistureRate, 2) : row.moistureText}</td>
+      <td>${pile ? String(round(pile.dryWeightTon, 3)) : row.dryWeightText}</td>
+      <td>${assay.rare ? "-" : String(round(assay.value, 4))}</td>
+      <td>${assay.rare ? String(round(assay.value, 4)) : "-"}</td>
+      <td>${assay.rare ? "-" : formatDash(assay.contentTon, 4)}</td>
+      <td>${assay.rare ? formatDash(assay.rareContentGram, 3) : "-"}</td>
+      <td>${row.editable ? `<input class="input price-input" type="number" step="0.01" data-purchase-price-element="${assay.element}" value="${assay.purchaseMetalPrice ?? ""}">` : money(row.purchaseMetalPrice)}</td>
+      <td>${row.editable ? `<input class="input price-input" type="number" step="0.01" data-purchase-rate-element="${assay.element}" value="${assay.purchaseRate ?? 100}">` : money(row.purchaseRate)}</td>
+      <td>¥${money(row.editable ? assay.purchaseUnitPrice : row.purchaseUnitPrice)}</td>
+      <td><strong>¥${money(row.editable ? assay.purchaseAmount : row.purchaseAmount)}</strong></td>
+    </tr>
   `;
 }
 
@@ -805,7 +940,9 @@ function renderSaleRow(row) {
       <td>${row.rareGradeText}</td>
       <td>${row.contentTonText}</td>
       <td>${row.rareContentGramText}</td>
-      <td><input class="input price-input" type="number" step="0.01" data-price-element="${row.element}" value="${row.price}"></td>
+      <td><input class="input price-input" type="number" step="0.01" data-price-element="${row.element}" value="${row.saleMetalPrice}"></td>
+      <td><input class="input price-input" type="number" step="0.01" data-sale-rate-element="${row.element}" value="${row.saleRate}"></td>
+      <td>¥${money(row.saleUnitPrice)}</td>
       <td><strong>¥${money(row.revenue)}</strong></td>
     </tr>
   `;
@@ -963,7 +1100,12 @@ async function saveCloudSalePrice(element, price) {
   if (!isCloudMode() || !isMembershipActive()) return;
   const { error } = await supabaseClient
     .from("user_sale_prices")
-    .upsert({ user_id: state.user.id, element, price: toNumber(price) });
+    .upsert({
+      user_id: state.user.id,
+      element,
+      price: toNumber(price),
+      coefficient: state.saleRates[element] === undefined ? 100 : toNumber(state.saleRates[element])
+    });
   if (error) throw error;
 }
 
@@ -999,10 +1141,12 @@ function bindEvents() {
     node.addEventListener("input", (event) => {
       state.pileForm[event.target.dataset.field] = event.target.value;
       if (event.target.dataset.field === "oreType") render();
+      if (["wetWeightTon", "moistureRate"].includes(event.target.dataset.field)) updateDryWeightPreview();
     });
     node.addEventListener("change", (event) => {
       state.pileForm[event.target.dataset.field] = event.target.value;
       if (event.target.dataset.field === "oreType") render();
+      if (["wetWeightTon", "moistureRate"].includes(event.target.dataset.field)) updateDryWeightPreview();
     });
   });
   document.querySelectorAll("[data-form='assay']").forEach((node) => {
@@ -1026,6 +1170,27 @@ function bindEvents() {
       }
     });
   });
+  document.querySelectorAll("[data-sale-rate-element]").forEach((node) => {
+    node.addEventListener("input", (event) => {
+      state.saleRates[event.target.dataset.saleRateElement] = toNumber(event.target.value);
+    });
+    node.addEventListener("change", async (event) => {
+      const element = event.target.dataset.saleRateElement;
+      state.saleRates[element] = toNumber(event.target.value);
+      try {
+        await saveCloudSalePrice(element, state.salePrices[element]);
+        saveAll();
+        render();
+      } catch (error) {
+        console.error(error);
+        toast("出售系数保存失败");
+      }
+    });
+  });
+  document.querySelectorAll("[data-purchase-price-element], [data-purchase-rate-element]").forEach((node) => {
+    node.addEventListener("input", handlePurchasePricingInput);
+    node.addEventListener("change", handlePurchasePricingInput);
+  });
   const buyerInput = document.getElementById("buyerName");
   if (buyerInput) buyerInput.addEventListener("input", (event) => { state.buyerName = event.target.value; });
 }
@@ -1041,6 +1206,26 @@ function handleAssayInput(event) {
     return;
   }
   state.assayDraft[field] = value;
+}
+
+function handlePurchasePricingInput(event) {
+  const element = event.target.dataset.purchasePriceElement || event.target.dataset.purchaseRateElement;
+  const normalized = normalizeElement(element);
+  state.draftAssays = state.draftAssays.map((item) => {
+    if (item.element !== normalized) return item;
+    if (event.target.dataset.purchasePriceElement) {
+      return { ...item, purchaseMetalPrice: toNumber(event.target.value) };
+    }
+    return { ...item, purchaseRate: toNumber(event.target.value) };
+  });
+  if (event.type === "change") render();
+}
+
+function updateDryWeightPreview() {
+  const dryWeightTon = calculateDryWeightFromForm();
+  state.pileForm.dryWeightTon = dryWeightTon || "";
+  const preview = document.getElementById("dryWeightPreview");
+  if (preview) preview.value = dryWeightTon || "";
 }
 
 async function handleAction(event) {
@@ -1065,6 +1250,8 @@ async function handleAction(event) {
     if (action === "quick-element") quickElement(el.dataset.element);
     if (action === "add-assay") addAssay();
     if (action === "remove-assay") removeAssay(el.dataset.element);
+    if (action === "go-purchase-pricing") goPurchasePricing();
+    if (action === "back-to-assay") state.view = "add";
     if (action === "save-pile") await savePile();
     if (action === "complete-sale") await completeSale();
     if (action === "switch-auth") state.authMode = el.dataset.mode || "login";
@@ -1115,7 +1302,6 @@ function editSelectedPile() {
     dryWeightTon: pile.dryWeightTon || "",
     wetWeightTon: pile.wetWeightTon || "",
     moistureRate: pile.moistureRate || "",
-    purchaseCost: pile.purchaseCost || "",
     source: pile.source || "",
     location: pile.location || "",
     remark: pile.remark || ""
@@ -1147,7 +1333,7 @@ function addAssay() {
   }
   state.draftAssays = [
     ...state.draftAssays.filter((item) => item.element !== element),
-    { element, value: toNumber(state.assayDraft.value), unit: state.assayDraft.unit || inferUnit(element) }
+    { element, value: toNumber(state.assayDraft.value), unit: state.assayDraft.unit || inferUnit(element), purchaseMetalPrice: 0, purchaseRate: 100 }
   ];
   state.assayDraft = { element: "", value: "", unit: "%" };
 }
@@ -1156,26 +1342,42 @@ function removeAssay(element) {
   state.draftAssays = state.draftAssays.filter((item) => item.element !== element);
 }
 
+function goPurchasePricing() {
+  const dryWeightTon = calculateDryWeightFromForm();
+  if (!toNumber(state.pileForm.wetWeightTon)) {
+    toast("请填写湿重");
+    return;
+  }
+  if (!dryWeightTon) {
+    toast("请填写正确的水分");
+    return;
+  }
+  if (!state.draftAssays.length) {
+    toast("请至少加入一个化验项");
+    return;
+  }
+  state.pileForm.dryWeightTon = dryWeightTon;
+  state.draftAssays = state.draftAssays.map((item) => ({
+    ...item,
+    purchaseMetalPrice: toNumber(item.purchaseMetalPrice),
+    purchaseRate: item.purchaseRate === undefined || item.purchaseRate === "" ? 100 : toNumber(item.purchaseRate)
+  }));
+  state.view = "purchase";
+}
+
 async function savePile() {
-  const form = state.pileForm;
-  if (!form.dryWeightTon && !form.wetWeightTon) {
-    toast("请填写干重或湿重");
+  const dryWeightTon = calculateDryWeightFromForm();
+  if (!dryWeightTon) {
+    toast("请先填写湿重和水分");
+    return;
+  }
+  if (!state.draftAssays.length) {
+    toast("请至少加入一个化验项");
     return;
   }
   const wasEditing = Boolean(state.editingPileId);
-  const pile = {
-    id: state.editingPileId || createId("pile"),
-    name: form.name || `${form.oreType} ${state.piles.length + 1}`,
-    oreType: form.oreType,
-    source: form.source,
-    location: form.location,
-    dryWeightTon: toNumber(form.dryWeightTon),
-    wetWeightTon: toNumber(form.wetWeightTon),
-    moistureRate: toNumber(form.moistureRate),
-    purchaseCost: toNumber(form.purchaseCost),
-    remark: form.remark,
-    assays: state.draftAssays
-  };
+  const pile = createDraftPile();
+  pile.purchaseCost = calculatePilePurchaseCost(pile);
   await saveCloudPile(pile);
   if (state.editingPileId) {
     state.piles = state.piles.map((item) => (item.id === state.editingPileId ? pile : item));
@@ -1317,6 +1519,7 @@ async function logout() {
   state.profile = null;
   state.piles = [];
   state.salePrices = createDefaultSalePrices();
+  state.saleRates = createDefaultSaleRates();
   state.soldRecords = [];
   state.activeRecordId = null;
   state.tab = "piles";

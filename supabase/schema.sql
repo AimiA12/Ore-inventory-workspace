@@ -51,9 +51,13 @@ create table if not exists public.user_sale_prices (
   user_id uuid not null references auth.users(id) on delete cascade,
   element text not null,
   price numeric not null default 0,
+  coefficient numeric not null default 100,
   updated_at timestamptz not null default now(),
   primary key (user_id, element)
 );
+
+alter table public.user_sale_prices
+add column if not exists coefficient numeric not null default 100;
 
 create or replace function public.set_updated_at()
 returns trigger
