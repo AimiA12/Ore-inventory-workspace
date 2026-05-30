@@ -863,7 +863,7 @@ function renderPurchaseCostView() {
         <tbody>${pile.assays.map((assay) => renderCostRow({ pileName: pile.name, pile, assay, editable: true })).join("")}</tbody>
       </table>
     </div>
-    <section class="panel total-panel"><div>购入总计<div class="total-sub">这批矿的成本</div></div><div><strong>¥${money(pile.purchaseCost)}</strong></div></section>
+    <section class="panel total-panel"><div>购入总计<div class="total-sub">这批矿的成本</div></div><div><strong id="purchaseCostTotalPreview">¥${money(pile.purchaseCost)}</strong></div></section>
     <div class="center-actions"><button class="primary-btn" data-action="save-pile">保存成本并入库</button></div>
   `;
 }
@@ -922,8 +922,8 @@ function renderCostRow(row) {
       <td>${assay.rare ? formatDash(assay.rareContentGram, 3) : "-"}</td>
       <td>${row.editable ? `<input class="input price-input" type="number" step="0.01" data-purchase-price-element="${assay.element}" value="${assay.purchaseMetalPrice ?? ""}">` : money(row.purchaseMetalPrice)}</td>
       <td>${row.editable ? `<input class="input price-input" type="number" step="0.01" data-purchase-rate-element="${assay.element}" value="${assay.purchaseRate ?? 100}">` : money(row.purchaseRate)}</td>
-      <td>¥${money(row.editable ? assay.purchaseUnitPrice : row.purchaseUnitPrice)}</td>
-      <td><strong>¥${money(row.editable ? assay.purchaseAmount : row.purchaseAmount)}</strong></td>
+      <td data-purchase-unit="${assay.element}">¥${money(row.editable ? assay.purchaseUnitPrice : row.purchaseUnitPrice)}</td>
+      <td><strong data-purchase-total="${assay.element}">¥${money(row.editable ? assay.purchaseAmount : row.purchaseAmount)}</strong></td>
     </tr>
   `;
 }
@@ -1218,7 +1218,7 @@ function handlePurchasePricingInput(event) {
     }
     return { ...item, purchaseRate: toNumber(event.target.value) };
   });
-  if (event.type === "change") render();
+  updatePurchaseCostPreview(normalized);
 }
 
 function updateDryWeightPreview() {
@@ -1226,6 +1226,17 @@ function updateDryWeightPreview() {
   state.pileForm.dryWeightTon = dryWeightTon || "";
   const preview = document.getElementById("dryWeightPreview");
   if (preview) preview.value = dryWeightTon || "";
+}
+
+function updatePurchaseCostPreview(element) {
+  const pile = enrichPile(createDraftPile());
+  const assay = pile.assays.find((item) => item.element === element);
+  const unitNode = Array.from(document.querySelectorAll("[data-purchase-unit]")).find((node) => node.dataset.purchaseUnit === element);
+  const totalNode = Array.from(document.querySelectorAll("[data-purchase-total]")).find((node) => node.dataset.purchaseTotal === element);
+  const totalPreview = document.getElementById("purchaseCostTotalPreview");
+  if (assay && unitNode) unitNode.textContent = `¥${money(assay.purchaseUnitPrice)}`;
+  if (assay && totalNode) totalNode.textContent = `¥${money(assay.purchaseAmount)}`;
+  if (totalPreview) totalPreview.textContent = `¥${money(pile.purchaseCost)}`;
 }
 
 async function handleAction(event) {
