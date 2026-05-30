@@ -1212,17 +1212,23 @@ button {
 .profile-main {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .profile-name {
   font-size: 22px;
   font-weight: 900;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-sub {
   margin-top: 4px;
   color: rgba(255, 250, 240, .66);
   font-size: 13px;
+  line-height: 1.4;
 }
 
 .stats-grid {
@@ -1623,6 +1629,31 @@ button {
   .content {
     padding-left: 12px;
     padding-right: 12px;
+  }
+
+  .profile-card {
+    gap: 12px;
+    padding: 18px;
+  }
+
+  .profile-card .avatar {
+    width: 58px;
+    height: 58px;
+    flex: 0 0 58px;
+  }
+
+  .profile-card .secondary-btn {
+    flex: 0 0 84px;
+    min-width: 84px;
+    padding: 0 10px;
+  }
+
+  .profile-name {
+    font-size: 18px;
+  }
+
+  .profile-sub {
+    font-size: 12px;
   }
 
   .pile-card {
