@@ -734,7 +734,7 @@ function renderHomeView() {
         <div class="summary-value money">¥${money(totalRevenue)}</div>
       </div>
     </section>
-    ${piles.length ? `<section class="pile-grid">${piles.map(renderPileCard).join("")}</section>` : `<div class="empty">还没有矿堆。点击右上角新增第一批库存。</div>`}
+    ${piles.length ? `<section class="pile-grid">${piles.map(renderPileCard).join("")}</section>` : `<div class="empty">还没有矿堆。点击右下角新增第一批库存。</div>`}
     ${state.selectedIds.length ? renderActionBar() : ""}
     ${!state.selectedIds.length ? `<button class="mobile-fab" data-action="go-add" aria-label="新增矿堆">+</button>` : ""}
   `;
